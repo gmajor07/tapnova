@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'game/daily_rewards.dart';
 import 'game/progression_manager.dart';
 import 'game/tapnova_game.dart';
+import 'managers/ad_manager.dart';
 import 'ui/game_over_overlay.dart';
 import 'ui/theme/app_theme.dart';
 import 'ui/widgets/glass_card.dart';
@@ -10,6 +13,11 @@ import 'ui/widgets/glow_button.dart';
 import 'ui/widgets/power_up_button.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize ads in the background so it doesn't block app startup
+  unawaited(AdManager.init());
+
   runApp(const MyApp());
 }
 
@@ -38,8 +46,10 @@ class _GameWidgetWrapperState extends State<GameWidgetWrapper> {
   late final TapNovaGame _game;
   final DailyRewardManager _dailyRewardManager = DailyRewardManager();
   final GameProgressionManager _progressionManager = GameProgressionManager();
+  final Set<int> _levelsWithShownAds = <int>{};
   bool _isRewardReady = false;
   bool _isGameStarted = false;
+  bool _isShowingAd = false;
   GameMode _selectedGameMode = GameMode.tap;
 
   @override
@@ -66,8 +76,13 @@ class _GameWidgetWrapperState extends State<GameWidgetWrapper> {
   }
 
   Future<void> _initializeRewards() async {
-    await _progressionManager.load();
-    await _dailyRewardManager.load();
+    try {
+      await _progressionManager.load();
+      await _dailyRewardManager.load();
+    } catch (e) {
+      debugPrint('Error initializing rewards: $e');
+    }
+
     if (!mounted) return;
     setState(() {
       _isRewardReady = true;
@@ -82,7 +97,7 @@ class _GameWidgetWrapperState extends State<GameWidgetWrapper> {
     if (reward != null) {
       switch (reward.type) {
         case DailyRewardType.coins:
-          _game.addCoins(reward.amount);
+          _game.addCoins(reward.amount, countTowardsRun: false);
           message = 'Day ${reward.day}: +${reward.amount} coins';
           break;
         case DailyRewardType.powerUp:
@@ -106,13 +121,97 @@ class _GameWidgetWrapperState extends State<GameWidgetWrapper> {
   }
 
   void _usePowerUp(String Function() activate) {
-    final message = activate();
+    _showSnackBar(activate());
+  }
+
+  void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message, style: const TextStyle(color: Colors.white)),
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  void _restartGame() {
+    _game.restartGame();
+    _levelsWithShownAds.clear();
+    setState(() {});
+  }
+
+  Future<void> _showRewardedAd({
+    required AdPlacement placement,
+    required String Function() onReward,
+  }) async {
+    final level = _game.currentLevel.level;
+    if (_isShowingAd) {
+      return;
+    }
+    if (_levelsWithShownAds.contains(level)) {
+      return;
+    }
+
+    setState(() {
+      _isShowingAd = true;
+    });
+
+    final result = await AdManager.showRewarded(placement: placement);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isShowingAd = false;
+    });
+
+    if (result.rewarded) {
+      _levelsWithShownAds.add(level);
+      _showSnackBar(onReward());
+      return;
+    }
+
+    _showSnackBar(result.message ?? 'No rewarded ad available right now.');
+  }
+
+  Future<void> _continueWithRewardedAd() async {
+    final level = _game.currentLevel.level;
+    if (_isShowingAd) {
+      return;
+    }
+    if (!_game.isGameOver || !_game.canContinueWithAd) {
+      _showSnackBar('Continue is not available right now.');
+      return;
+    }
+    if (_levelsWithShownAds.contains(level)) {
+      _showSnackBar('This level already used its ad.');
+      return;
+    }
+
+    setState(() {
+      _isShowingAd = true;
+    });
+
+    final result = await AdManager.showRewarded(
+      placement: AdPlacement.continueGame,
+    );
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isShowingAd = false;
+    });
+
+    if (!result.rewarded) {
+      _showSnackBar(result.message ?? 'No rewarded ad available right now.');
+      return;
+    }
+
+    _levelsWithShownAds.add(level);
+    final message = _game.continueFromRewardedAd();
+    _game.resumeEngine();
+    setState(() {});
+    _showSnackBar(message);
   }
 
   void _handleGameUiSignal() {
@@ -254,6 +353,18 @@ class _GameWidgetWrapperState extends State<GameWidgetWrapper> {
                       onPressed: _game.bubbleBlastCharges > 0
                           ? () => _usePowerUp(_game.activateBubbleBlast)
                           : null,
+                    ),
+                    PowerUpButton(
+                      icon: Icons.video_library_rounded,
+                      label: 'P-UP AD',
+                      charges: 0,
+                      isActive: _isShowingAd,
+                      onPressed: _isShowingAd
+                          ? null
+                          : () => _showRewardedAd(
+                              placement: AdPlacement.unlockPowerUp,
+                              onReward: _game.grantRandomPowerUpReward,
+                            ),
                     ),
                   ],
                 ),
@@ -640,8 +751,20 @@ class _GameWidgetWrapperState extends State<GameWidgetWrapper> {
             child: GameWidget<TapNovaGame>(
               game: _game,
               overlayBuilderMap: {
-                GameOverOverlay.id: (context, game) =>
-                    GameOverOverlay(game: game),
+                GameOverOverlay.id: (context, game) => GameOverOverlay(
+                  game: game,
+                  onRestart: _restartGame,
+                  onContinue: game.canContinueWithAd
+                      ? _continueWithRewardedAd
+                      : null,
+                  onDoubleCoins: game.canDoubleCoinsWithAd
+                      ? () => _showRewardedAd(
+                          placement: AdPlacement.doubleCoins,
+                          onReward: game.claimDoubleCoinsReward,
+                        )
+                      : null,
+                  isShowingAd: _isShowingAd,
+                ),
               },
             ),
           ),

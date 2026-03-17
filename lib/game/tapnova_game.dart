@@ -90,6 +90,9 @@ class TapNovaGame extends FlameGame with TapCallbacks {
   int _levelProgress = 0;
   double _levelTimeRemaining = 0;
   int _comboChain = 0;
+  int _runCoinsEarned = 0;
+  final Set<int> _continueAdUsedLevels = <int>{};
+  bool _hasClaimedDoubleCoinsAd = false;
   double _comboWindowRemaining = 0;
   String _comboLabel = '';
   double _shakeRemaining = 0;
@@ -152,6 +155,11 @@ class TapNovaGame extends FlameGame with TapCallbacks {
   double get bubbleSpeedMultiplier => isSlowTimeActive ? 0.55 : 1.0;
   double get bubbleHitboxScale => isBubbleMagnetActive ? 1.55 : 1.0;
   int get levelProgress => _levelProgress;
+  int get runCoinsEarned => _runCoinsEarned;
+  bool get canContinueWithAd =>
+      isGameOver && !_continueAdUsedLevels.contains(currentLevel.level);
+  bool get canDoubleCoinsWithAd =>
+      !_hasClaimedDoubleCoinsAd && _runCoinsEarned > 0;
   double? get levelTimeRemaining =>
       currentLevel.timeLimitSeconds == null ? null : _levelTimeRemaining;
   int get comboChain => _comboChain;
@@ -429,6 +437,9 @@ class TapNovaGame extends FlameGame with TapCallbacks {
     _spawnTimer = 0;
     _currentLevelIndex = 0;
     _comboChain = 0;
+    _runCoinsEarned = 0;
+    _continueAdUsedLevels.clear();
+    _hasClaimedDoubleCoinsAd = false;
     _comboWindowRemaining = 0;
     _comboLabel = '';
     _shakeRemaining = 0;
@@ -891,6 +902,9 @@ class TapNovaGame extends FlameGame with TapCallbacks {
 
   void _resetCombo() {
     _comboChain = 0;
+    _runCoinsEarned = 0;
+    // Note: Do NOT reset _hasUsedContinueAd or _hasClaimedDoubleCoinsAd here
+    // These should only be reset when the game is restarted
     _comboWindowRemaining = 0;
     _comboLabel = '';
     _comboText.text = '';
@@ -940,6 +954,7 @@ class TapNovaGame extends FlameGame with TapCallbacks {
     required int rareBubbleReward,
   }) {
     if (coinReward > 0) {
+      _runCoinsEarned += coinReward;
       progressionManager.addCoins(coinReward);
     }
     if (rareBubbleReward > 0) {
@@ -954,6 +969,10 @@ class TapNovaGame extends FlameGame with TapCallbacks {
     if (unlocks.isEmpty) {
       return;
     }
+    _runCoinsEarned += unlocks.fold<int>(
+      0,
+      (total, unlock) => total + unlock.definition.coinsReward,
+    );
     _pendingAchievementUnlocks.addAll(unlocks);
     _notifyUi();
   }
@@ -964,9 +983,62 @@ class TapNovaGame extends FlameGame with TapCallbacks {
     return unlocks;
   }
 
-  void addCoins(int amount) {
+  void addCoins(int amount, {bool countTowardsRun = true}) {
+    if (countTowardsRun && amount > 0) {
+      _runCoinsEarned += amount;
+    }
     progressionManager.addCoins(amount);
     _notifyUi();
+  }
+
+  void _clearActiveRoundEntities() {
+    children.whereType<Player>().toList().forEach((target) {
+      target.removeFromParent();
+    });
+    children.whereType<Obstacle>().toList().forEach((bomb) {
+      bomb.removeFromParent();
+    });
+  }
+
+  String continueFromRewardedAd() {
+    if (!isGameOver) {
+      return 'Game is already running.';
+    }
+    if (_continueAdUsedLevels.contains(currentLevel.level)) {
+      return 'Continue ad already used on this level.';
+    }
+
+    _continueAdUsedLevels.add(currentLevel.level);
+    isGameOver = false;
+    lives = 1;
+    gameOverReason = 'No lives left.';
+    _clearActiveRoundEntities();
+    _spawnTimer = 0;
+    _resetCombo();
+    if (currentLevel.timeLimitSeconds != null && _levelTimeRemaining <= 0) {
+      _levelTimeRemaining = max(
+        8,
+        (currentLevel.timeLimitSeconds! * 0.5).ceil(),
+      ).toDouble();
+    }
+    overlays.remove(GameOverOverlay.id);
+    _updateHud();
+    _notifyUi();
+    return 'Continue granted. Good luck!';
+  }
+
+  String claimDoubleCoinsReward() {
+    if (_hasClaimedDoubleCoinsAd) {
+      return 'Double coins already claimed this run.';
+    }
+    if (_runCoinsEarned <= 0) {
+      return 'Earn some coins first.';
+    }
+
+    _hasClaimedDoubleCoinsAd = true;
+    final bonus = _runCoinsEarned;
+    addCoins(bonus, countTowardsRun: false);
+    return 'Coins doubled: +$bonus';
   }
 
   String grantRandomPowerUpReward() {

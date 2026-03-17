@@ -1,21 +1,34 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
+
 import '../game/tapnova_game.dart';
 import 'theme/app_theme.dart';
 import 'widgets/glass_card.dart';
 import 'widgets/glow_button.dart';
 
 class GameOverOverlay extends StatelessWidget {
-  final TapNovaGame game;
+  const GameOverOverlay({
+    super.key,
+    required this.game,
+    required this.onRestart,
+    this.onContinue,
+    this.onDoubleCoins,
+    this.isShowingAd = false,
+  });
+
   static const String id = 'GameOver';
 
-  const GameOverOverlay({super.key, required this.game});
+  final TapNovaGame game;
+  final VoidCallback onRestart;
+  final VoidCallback? onContinue;
+  final VoidCallback? onDoubleCoins;
+  final bool isShowingAd;
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Blurred backdrop with red tint
         Positioned.fill(
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
@@ -24,7 +37,6 @@ class GameOverOverlay extends StatelessWidget {
             ),
           ),
         ),
-        // Decorative orbs
         Positioned(
           top: -80,
           right: -60,
@@ -35,7 +47,6 @@ class GameOverOverlay extends StatelessWidget {
           left: -60,
           child: _Orb(color: AppTheme.accentPurple, size: 240, opacity: 0.08),
         ),
-        // Center card
         Center(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -57,7 +68,6 @@ class GameOverOverlay extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Danger icon
                   Container(
                     width: 64,
                     height: 64,
@@ -73,7 +83,6 @@ class GameOverOverlay extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 18),
-                  // GAME OVER gradient text
                   ShaderMask(
                     shaderCallback: (bounds) =>
                         AppTheme.redOrangeGradient.createShader(bounds),
@@ -83,10 +92,9 @@ class GameOverOverlay extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // Divider
                   Container(
                     height: 1,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
                           Colors.transparent,
@@ -97,11 +105,9 @@ class GameOverOverlay extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  // Score display
                   Text('${game.score}', style: AppTheme.scoreStyle),
                   const Text('FINAL SCORE', style: AppTheme.labelStyle),
                   const SizedBox(height: 14),
-                  // Level badge
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
@@ -125,7 +131,6 @@ class GameOverOverlay extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // Reason
                   Text(
                     game.gameOverReason,
                     style: const TextStyle(
@@ -135,13 +140,61 @@ class GameOverOverlay extends StatelessWidget {
                     ),
                     textAlign: TextAlign.center,
                   ),
+                  if (game.runCoinsEarned > 0) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      'Run coins: ${game.runCoinsEarned}',
+                      style: const TextStyle(
+                        color: AppTheme.accentGold,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 24),
-                  // Restart button
+                  if (onContinue != null) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: GlowButton(
+                        label: isShowingAd ? 'LOADING AD...' : 'CONTINUE',
+                        onPressed: isShowingAd ? null : onContinue,
+                        gradient: AppTheme.goldGradient,
+                        glowShadows: AppTheme.goldGlow(spread: 3, blur: 18),
+                        icon: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        height: 52,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (onDoubleCoins != null) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: GlowButton(
+                        label: isShowingAd ? 'LOADING AD...' : 'DOUBLE COINS',
+                        onPressed: isShowingAd ? null : onDoubleCoins,
+                        gradient: AppTheme.redOrangeGradient,
+                        glowShadows: AppTheme.redGlow(spread: 3, blur: 18),
+                        icon: const Icon(
+                          Icons.monetization_on_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        height: 52,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   SizedBox(
                     width: double.infinity,
                     child: GlowButton(
                       label: 'RESTART',
-                      onPressed: game.restartGame,
+                      onPressed: isShowingAd ? null : onRestart,
                       gradient: AppTheme.cyanPurpleGradient,
                       glowShadows: AppTheme.cyanGlow(spread: 3, blur: 18),
                       icon: const Icon(
@@ -164,11 +217,11 @@ class GameOverOverlay extends StatelessWidget {
 }
 
 class _Orb extends StatelessWidget {
+  const _Orb({required this.color, required this.size, required this.opacity});
+
   final Color color;
   final double size;
   final double opacity;
-
-  const _Orb({required this.color, required this.size, required this.opacity});
 
   @override
   Widget build(BuildContext context) {
